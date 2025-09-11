@@ -41,7 +41,7 @@
   <Actions Context="Author">
     <Exec>
       <Command>C:\Program Files\PowerShell\7\pwsh.exe</Command>
-      <Arguments>-ExecutionPolicy Bypass -File "C:\Scripts\Renew-PaperCutCert.ps1"</Arguments>
+      <Arguments>-ExecutionPolicy Bypass -File "C:\Scripts\Renew-PaperCutCert.ps1" -Fqdn "papercut.domain.com"</Arguments>
     </Exec>
   </Actions>
 </Task>
