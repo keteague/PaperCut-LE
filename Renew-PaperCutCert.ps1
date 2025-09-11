@@ -1,74 +1,144 @@
+<#
+.SYNOPSIS
+  Renews the PaperCut SSL certificate using Posh-ACME and ensures the PFX
+  always has the password stored in pfxpass.txt.
+
+.NOTES
+  Run as Administrator.
+  Requires: Posh-ACME, Java keytool (from PaperCut runtime\jre\bin).
+#>
+
 param(
+    [Parameter(Mandatory=$true)]
+    [string]$Fqdn,
+
     [switch]$UseStaging
 )
 
-# === Imports ===
-Import-Module Posh-ACME -Force
+# --- Paths ---
+$pfxPassFile    = 'C:\ProgramData\PaperCut\CertRenew\pfxpass.txt'
+$keystorePassFile = 'C:\ProgramData\PaperCut\CertRenew\keystorepass.txt'
+$pcDir          = 'C:\Program Files\PaperCut MF\server\custom'
+$dstPfx         = Join-Path $pcDir 'MySslExportCert.pfx'
+$dstKeystore    = Join-Path $pcDir 'my-ssl-keystore'
+$keytoolPath    = 'C:\Program Files\PaperCut MF\runtime\jre\bin\keytool.exe'
+
+# --- Load PFX password ---
+if (-not (Test-Path $pfxPassFile)) {
+    throw "Missing PFX password file at $pfxPassFile"
+}
+$pfxPass = Get-Content $pfxPassFile | ConvertTo-SecureString
+$plainPw = [System.Net.NetworkCredential]::new('', $pfxPass).Password
+
+# --- Load PaperCut keystore password ---
+if (-not (Test-Path $keystorePassFile)) {
+    $ksPw = Read-Host "Enter PaperCut keystore password (server.ssl.keystore-password)" -AsSecureString
+    $ksPlain = [System.Net.NetworkCredential]::new('', $ksPw).Password
+    $ksPlain | Out-File -FilePath $keystorePassFile -Encoding ascii -NoNewline
+    Write-Host "Saved encrypted keystore password to $keystorePassFile"
+} else {
+    $ksPw = Get-Content $keystorePassFile | ConvertTo-SecureString
+    $ksPlain = [System.Net.NetworkCredential]::new('', $ksPw).Password
+    Write-Host "Using existing keystore password at $keystorePassFile"
+}
+
+# --- Import modules ---
+Import-Module Posh-ACME -ErrorAction Stop
 Import-Module "$PSScriptRoot\Modules\PoshAcmeHelpers.psm1" -Force
 Import-Module "$PSScriptRoot\Modules\PaperCutIntegration.psm1" -Force
 
-# === Config ===
-$Fqdn         = 'rkb-demo-cli1.rkbtesting.net'
-$ContactEmail = 'mailto:admin@rkbtesting.net'
-
-$pcRoot     = 'C:\Program Files\PaperCut MF'
-$keytool    = Join-Path $pcRoot 'runtime\jre\bin\keytool.exe'
-$ksFile     = Join-Path $pcRoot 'server\custom\my-ssl-keystore'
-$propsPath  = Join-Path $pcRoot 'server\server.properties'
-$dstPfx     = Join-Path $pcRoot 'server\custom\MySslExportCert.pfx'
-
-# === Passwords ===
-$pfxPass  = Get-Content 'C:\ProgramData\PaperCut\CertRenew\pfxpass.txt' | ConvertTo-SecureString
-$ksPass   = Get-Content 'C:\ProgramData\PaperCut\CertRenew\keystorepass.txt' | ConvertTo-SecureString
-$plainPfx = [System.Net.NetworkCredential]::new('', $pfxPass).Password
-$plainKs  = [System.Net.NetworkCredential]::new('', $ksPass).Password
-
-# === Step 1: Check existing certificate ===
-$cert = Get-ExistingCertificate -Fqdn $Fqdn -UseStaging:$UseStaging -PfxPass $pfxPass -ContactEmail $ContactEmail
-
-if ($cert.NotAfter -le (Get-Date).AddDays(30)) {
-    Write-Host ("Certificate for {0} expires soon ({1}). Renewing..." -f $Fqdn, $cert.NotAfter)
-    $cert = New-PACertificate $Fqdn -Plugin WebSelfHost -PluginArgs @{ } -PfxPass $pfxPass -FriendlyName "PaperCut-$Fqdn"
-}
-else {
-    Write-Host ("No renewal needed. Current expiry: {0}" -f $cert.NotAfter)
+# --- Pick ACME server ---
+if ($UseStaging) {
+    Write-Host "Using Let's Encrypt STAGING server"
+    Set-PAServer LE_STAGE
+} else {
+    Write-Host "Using Let's Encrypt PRODUCTION server"
+    Set-PAServer LE_PROD
 }
 
-# === Step 2: Ensure PFX available ===
-if ($cert.PfxFullChain -and (Test-Path $cert.PfxFullChain)) {
-    Write-Host ("Using renewed PFX from cache: {0}" -f $cert.PfxFullChain)
-    Copy-Item $cert.PfxFullChain $dstPfx -Force
-}
-else {
-    Write-Warning ("No PFX found in cache, attempting to rebuild for {0}..." -f $Fqdn)
-
-    if (-not (Test-Path $cert.CertFile) -or -not (Test-Path $cert.KeyFile)) {
-        throw ("No PEMs available for {0}. Cannot rebuild." -f $Fqdn)
-    }
-
-    $rebuilt = Rebuild-PfxFromPem -CertFile $cert.CertFile -KeyFile $cert.KeyFile -ChainFile $cert.ChainFile -OutPfx $dstPfx -Password $pfxPass
-    $dstPfx = $rebuilt
-}
-
-# === Step 3: Verify PFX ===
-if (-not (Test-Path $dstPfx)) {
-    throw ("Renewal failed: expected PFX file {0} not found" -f $dstPfx)
-}
-
+# --- Ensure ACME account exists ---
 try {
-    $testCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList @($dstPfx, $plainPfx)
-}
-catch {
-    throw ("Failed to load renewed PFX {0}: {1}" -f $dstPfx, $_.Exception.Message)
-}
-
-if (-not $testCert.HasPrivateKey) {
-    throw ("Renewed PFX {0} does not contain a private key. Aborting PaperCut import." -f $dstPfx)
+    Get-PAAccount -ErrorAction Stop | Out-Null
+} catch {
+    New-PAAccount -AcceptTOS -Contact "mailto:admin@$($Fqdn.Split('.')[1..2] -join '.')" | Out-Null
+    Write-Host "Created new ACME account"
 }
 
-Write-Host ("Verified renewed PFX at {0} (Subject: {1}, Expiry: {2})" -f $dstPfx, $testCert.Subject, $testCert.NotAfter)
+# --- Renew or fetch existing cert ---
+$cert = Get-PACertificate $Fqdn -ErrorAction SilentlyContinue
+if ($null -eq $cert) {
+    Write-Host "No existing cert order. Issuing new..."
+    $cert = New-PACertificate $Fqdn -Plugin WebSelfHost -PluginArgs @{} -PfxPass $pfxPass -FriendlyName "PaperCut-$Fqdn"
+} else {
+    $before = $cert.NotAfter
+    if ($before -lt (Get-Date).AddDays(30)) {
+        Write-Host "Renewing certificate..."
+        $cert = Submit-Renewal $Fqdn
+        $after = $cert.NotAfter
+        Write-Host "Certificate renewed. New expiry: $after"
+    } else {
+        Write-Host "No renewal needed. Current expiry: $before"
+    }
+}
 
-# === Step 4: Import into PaperCut ===
-Import-PfxToKeystore -PfxPath $dstPfx -KeytoolPath $keytool -KeystorePath $ksFile -PfxPassword $plainPfx -KeystorePassword $plainKs
-Update-ServerProperties -ServerPropsPath $propsPath -KeystorePath $ksFile -KeystorePassword $plainKs
-Restart-PaperCut
+# --- Normalize PFX password for PaperCut ---
+Write-Host "🔐 Rebuilding PFX from PEMs for PaperCut..."
+$plainPw = [System.Net.NetworkCredential]::new('', $pfxPass).Password
+$certDir  = Split-Path $cert.CertFile
+$certPem  = Join-Path $certDir "cert.cer"
+$keyPem   = Join-Path $certDir "privkey.key"
+if (-not (Test-Path $keyPem)) {
+    $keyPem = Join-Path $certDir "cert.key"
+}
+$chainPem = Join-Path $certDir "chain.cer"
+
+if (-not (Test-Path $certPem) -or -not (Test-Path $keyPem)) {
+    throw "Missing PEM components in $certDir"
+}
+
+$openssl = "C:\Program Files\OpenSSL-Win64\bin\openssl.exe"
+if (-not (Test-Path $openssl)) {
+    throw "OpenSSL not found at $openssl. Please install or update path."
+}
+
+# Bundle PEMs
+$tmpPem = [System.IO.Path]::GetTempFileName()
+Get-Content $keyPem  | Out-File $tmpPem -Encoding ascii
+Get-Content $certPem | Out-File $tmpPem -Append -Encoding ascii
+if (Test-Path $chainPem) {
+    Get-Content $chainPem | Out-File $tmpPem -Append -Encoding ascii
+}
+
+$pwFile = [System.IO.Path]::GetTempFileName()
+Set-Content -Path $pwFile -Value $plainPw -NoNewline
+
+& $openssl pkcs12 -export `
+    -in $tmpPem `
+    -out $dstPfx `
+    -password file:$pwFile `
+    -name "PaperCut-$Fqdn"
+
+Remove-Item $tmpPem,$pwFile -Force
+if ($LASTEXITCODE -ne 0) {
+    throw "OpenSSL failed to build PFX (exit $LASTEXITCODE)"
+}
+
+Write-Host "✅ Rebuilt PFX at $dstPfx with PaperCut password"
+
+# --- Import into PaperCut keystore ---
+Write-Host "Importing keystore $dstPfx to $dstKeystore..."
+& $keytoolPath -importkeystore `
+    -destkeystore $dstKeystore `
+    -deststorepass $ksPlain `
+    -srckeystore  $dstPfx `
+    -srcstoretype PKCS12 `
+    -srcstorepass $plainPw `
+    -noprompt
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Keytool import failed with exit code $LASTEXITCODE"
+}
+
+# --- Restart PaperCut ---
+Restart-Service PCAppServer -Force -ErrorAction Stop
+Write-Host "🎉 PaperCut SSL certificate updated successfully!"
