@@ -2,11 +2,12 @@
 Leverage the use of Posh-ACME to issue a Let's Encrypt TLS certificate for use with PaperCut MF.
 
 # PREREQUISITES
-PowerShell 7
+  * PowerShell 7
+  * OpenSSL (Lite) - https://slproweb.com/products/Win32OpenSSL.html
 
 # INSTALL
-1. Download driver script and related modules.  Note that modules should be in a "Modules" sub-directory from where the driver script (Setup-PaperCutLetsEncrypt.ps1) runs.
-2. Edit Setup-PaperCutLetsEncrypt.ps1 and modify the $Fqdn variable
+1. Download driver script and related modules.  Note that modules should be in a "Modules" sub-directory from where the driver script (Setup-PaperCutLetsEncrypt.ps1) runs.  In my test environment, I dropped them into C:\Scripts.
+2. Edit Setup-PaperCutLetsEncrypt.ps1 and modify the $Fqdn and $ContactEmail variables
 3. Open PowerShell 7 as Administrator
 4. Run Setup-PaperCutLetsEncrypt.ps1
 
