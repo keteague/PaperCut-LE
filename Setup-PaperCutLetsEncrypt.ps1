@@ -24,8 +24,35 @@ $propsPath  = Join-Path $pcRoot 'server\server.properties'
 $dstPfx     = Join-Path $pcRoot 'server\custom\MySslExportCert.pfx'
 
 # === Passwords ===
-$pfxPass  = Get-Content 'C:\ProgramData\PaperCut\CertRenew\pfxpass.txt' | ConvertTo-SecureString
-$ksPass   = Get-Content 'C:\ProgramData\PaperCut\CertRenew\keystorepass.txt' | ConvertTo-SecureString
+# --- Ensure password directory exists ---
+$passDir = 'C:\ProgramData\PaperCut\CertRenew'
+if (-not (Test-Path $passDir)) {
+    New-Item -Path $passDir -ItemType Directory -Force | Out-Null
+}
+
+# --- Load or prompt for PFX password ---
+$pfxPassFile = Join-Path $passDir 'pfxpass.txt'
+if (Test-Path $pfxPassFile) {
+    Write-Host "Using existing PFX password at $pfxPassFile"
+    $pfxPass = Get-Content $pfxPassFile | ConvertTo-SecureString
+} else {
+    $pfxPass = Read-Host "Enter a new PFX export password" -AsSecureString
+    $plainPw = [System.Net.NetworkCredential]::new('', $pfxPass).Password
+    $plainPw | Out-File -FilePath $pfxPassFile -Encoding ascii -NoNewline
+    Write-Host "Saved PFX password to $pfxPassFile"
+}
+
+# --- Load or prompt for PaperCut keystore password ---
+$ksPassFile = Join-Path $passDir 'keystorepass.txt'
+if (Test-Path $ksPassFile) {
+    Write-Host "Using existing keystore password at $ksPassFile"
+    $ksPw = Get-Content $ksPassFile | ConvertTo-SecureString
+} else {
+    $ksPw = Read-Host "Enter PaperCut keystore password (server.ssl.keystore-password)" -AsSecureString
+    $plainKs = [System.Net.NetworkCredential]::new('', $ksPw).Password
+    $plainKs | Out-File -FilePath $ksPassFile -Encoding ascii -NoNewline
+    Write-Host "Saved keystore password to $ksPassFile"
+}
 $plainPfx = [System.Net.NetworkCredential]::new('', $pfxPass).Password
 $plainKs  = [System.Net.NetworkCredential]::new('', $ksPass).Password
 
