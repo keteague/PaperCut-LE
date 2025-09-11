@@ -1,4 +1,7 @@
 param(
+    [Parameter(Mandatory=$true)]
+    [string]$Fqdn,
+
     [switch]$UseStaging
 )
 
@@ -63,12 +66,10 @@ try {
 }
 
 # --- Issue cert ---
-$Fqdn = Read-Host "Enter FQDN for PaperCut server"
-$pfxPlain = [System.Net.NetworkCredential]::new('', $pfxPass).Password
 $cert = New-PACertificate $Fqdn -Plugin WebSelfHost -PluginArgs @{} -PfxPass $pfxPass -FriendlyName "PaperCut-$Fqdn"
 
 # --- Normalize and import ---
 Copy-Item $cert.PfxFullChain $dstPfx -Force
-Import-PaperCutPfx -PfxPath $dstPfx -KeystorePath $dstKeystore -KeytoolPath $keytoolPath -KeystorePassword $plainKs -PfxPassword $pfxPlain
+Import-PaperCutPfx -PfxPath $dstPfx -KeystorePath $dstKeystore -KeytoolPath $keytoolPath -KeystorePassword $plainKs -PfxPassword $plainPfx
 
-Write-Host "🎉 Initial PaperCut certificate setup complete"
+Write-Host "🎉 Initial PaperCut certificate setup complete for $Fqdn"
